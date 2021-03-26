@@ -62,8 +62,11 @@ class PodmanProvider(Provider):
         logger.info(f"{self.dsp_name}: Creating container for host: {hostname}")
         hostname = req["name"]
         image = req["image"]
-        network = req.get("network")
-        container_id = await self.podman.run(image, hostname, network)
+        network = req.get("network") or "mrack-network"  # TODO prov-config defaults
+        await self.podman.network(network, exists=True)
+        container_id = await self.podman.run(
+            image, hostname, network, remove_at_stop=True
+        )
         return container_id
 
     async def wait_till_provisioned(self, resource):
@@ -107,6 +110,14 @@ class PodmanProvider(Provider):
         """Delete provisioned host."""
         deleted = await self.podman.rm(host_id, force=True)
         return deleted
+
+    async def delete_hosts(self, hosts):
+        """Issue deletion of containers and network based on provisioning results."""
+        result = super().delete_hosts(hosts)
+        logger.info(f"{self.dsp_name}: Issuing network deletion")
+        network = "mrack-network"  # FIXME load the network(s) from host info
+        await self.podman.network(network, exists=False)
+        return result
 
     def get_status(self, state):
         """Read status from inspect State object."""

@@ -52,13 +52,40 @@ class Podman:
             raise ProvisioningError(stderr)
         return stdout, stderr, process
 
-    async def run(self, image, hostname=None, network=None):
+    async def run(self, image, hostname=None, network=None, remove_at_stop=False):
         """Run a container."""
-        args = ["run", "-dti"]
+        cont_name = hostname.split(".")[0]
+        args = [
+            "run",
+            "-dti",
+            #  cap-add
+            "--cap-add=cap_audit_write",
+            # sec opt
+            "--security-opt",
+            "seccomp=./seccomp.json",
+            # temporaty filesystems
+            "--tmpfs=/tmp",
+            "--tmpfs=/run",
+            "--tmpfs=/run/lock",
+            # mounting volume as read only
+            "-v=/sys/fs/cgroup:/sys/fs/cgroup:ro",
+            # adding ipv6 support to network
+            "--network='enable_ipv6=true'",
+            # name for the container based on metadata
+            "--name",
+            cont_name,
+        ]
+
+        if remove_at_stop:
+            args.append("--rm")
+
         if hostname:
             args.extend(["-h", hostname])
-        if network:
-            args.extend(["--network", network])
+
+        if not network:
+            network = "mrack-network"  # TODO provisioning-config
+
+        args.extend(["--network", network])
         args.append(image)
 
         stdout, _stderr, _process = await self._run_podman(args)
@@ -78,6 +105,34 @@ class Podman:
         if force:
             args.append("-f")
         args.append(container_id)
+        _stdout, _stderr, process = await self._run_podman(args, raise_on_err=False)
+        return process.returncode == 0
+
+    async def stop(self, container_id, time=0):
+        """Remove a container."""
+        args = ["stop"]
+        if time:
+            args.append("--time")
+            args.append(time)
+
+        args.append(container_id)
+        _stdout, _stderr, process = await self._run_podman(args, raise_on_err=False)
+        return process.returncode == 0
+
+    async def network(self, network, exists=True):
+        """Create or remove a podman network if network is created."""
+        args = ["network", "inspect", network]
+        _stdout, _stderr, inspect = await self._run_podman(args, raise_on_err=False)
+        created = inspect.returncode == 0
+        if created:
+            logger.info(f"Network {network} is already present")
+
+        if not created and exists:
+            args[-2] = "create"
+        if created and not exists:
+            args[-2] = "remove"
+
+        args.append(network)
         _stdout, _stderr, process = await self._run_podman(args, raise_on_err=False)
         return process.returncode == 0
 
